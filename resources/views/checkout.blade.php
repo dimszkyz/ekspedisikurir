@@ -7,28 +7,14 @@
         <div class="checkout-steps">
             {{-- ... Step Indicator ... --}}
         </div>
-        <div class="form-group">
-            <label for="courier">Pilih Kurir</label>
-            <select name="courier" id="courier" class="form-control">
-                <option value="">-- Pilih Kurir --</option>
-                @foreach($couriers as $courier)
-                <option value="{{ $courier['code'] }}">
-                    {{ $courier['name'] }}
-                </option>
-                @endforeach
-            </select>
-        </div>
 
-        <div class="form-group">
-            <label for="service">Pilih Layanan</label>
-            <select name="service" id="service" class="form-control">
-                <option value="">-- Pilih layanan --</option>
-            </select>
-        </div>
-
-
-
-        <form id="checkout-form" name="checkout-form" action="{{ route('cart.place.an.order') }}" method="POST">
+        {{-- Menambahkan data-attribute untuk dibaca oleh JS dengan aman --}}
+        <form id="checkout-form"
+            name="checkout-form"
+            action="{{ route('cart.place.an.order') }}"
+            method="POST"
+            data-total-weight="{{ $totalWeight ?? 0 }}"
+            data-subtotal="{{ $total ?? 0 }}">
             @csrf
             <div class="checkout-form">
                 <div class="billing-info__wrapper">
@@ -40,7 +26,6 @@
                         <div class="col-6 text-right">
                             <a href="{{ route('user.address.index') }}" class="btn btn-link fw-semi-bold mt-4"
                                 style="text-decoration: underline; background: none; border: none;">Ubah Alamat</a>
-
                         </div>
                         @endif
                     </div>
@@ -56,7 +41,7 @@
                                     <p>{{ $address->address }}</p>
                                     <p>{{ $address->landmark }}</p>
                                     <p>{{ $address->locality }}, {{ $address->city }}, {{ $address->state }}</p>
-                                    <p>{{ $address->zip }}, {{ $address->country }}</p>
+                                    <p>{{ $address->postal_code }}, {{ $address->country }}</p>
                                 </div>
                             </div>
                         </div>
@@ -149,10 +134,10 @@
                             @enderror
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label for="zip">Kode Pos <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control @error('zip') is-invalid @enderror"
-                                id="zip" name="zip" value="{{ old('zip') }}" required>
-                            @error('zip')
+                            <label for="postal_code">Kode Pos <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control @error('postal_code') is-invalid @enderror"
+                                id="postal_code" name="postal_code" value="{{ old('postal_code') }}" required>
+                            @error('postal_code')
                             <div class="text-danger mt-1">{{ $message }}</div>
                             @enderror
                         </div>
@@ -167,6 +152,52 @@
                         </div>
                     </div>
                     @endif
+                    @if ($address)
+                    <p>{{ $address->province }}, {{ $address->city }}, {{ $address->district }} ({{ $address->postal_code }})</p>
+                    @endif
+
+                    <div class="form-group mt-4">
+                        <label for="courier">Pilih Kurir</label>
+                        <select name="courier" id="courier" class="form-control" @if(empty($shippingCouriers)) disabled @endif>
+                            <option value="">-- Pilih Kurir --</option>
+
+                            @if(!empty($shippingCouriers))
+                            @foreach($shippingCouriers as $sc)
+                            @php
+                            // dukung array atau object
+                            if (is_array($sc)) {
+                            $code = $sc['courier_code'] ?? $sc['courier_service_code'] ?? null;
+                            $name = $sc['courier_name'] ?? $sc['courier_service_name'] ?? null;
+                            $service = $sc['courier_service_code'] ?? null;
+                            $serviceName = $sc['courier_service_name'] ?? null;
+                            } else {
+                            $code = $sc->courier_code ?? $sc->courier_service_code ?? null;
+                            $name = $sc->courier_name ?? $sc->courier_service_name ?? null;
+                            $service = $sc->courier_service_code ?? null;
+                            $serviceName = $sc->courier_service_name ?? null;
+                            }
+                            $value = $code . ($service ? '|' . $service : '');
+                            @endphp
+
+                            @if($code)
+                            <option value="{{ $value }}">
+                                {{ $name }}{!! $serviceName ? ' - ' . e($serviceName) : '' !!}
+                            </option>
+                            @endif
+                            @endforeach
+                            @else
+                            <option value="" disabled>Tidak ada kurir yang tersedia.</option>
+                            @endif
+                        </select>
+                    </div>
+
+
+                    <div class="form-group">
+                        <label for="service">Pilih Layanan</label>
+                        <select name="service" id="service" class="form-control" disabled>
+                            <option value="">-- Pilih kurir terlebih dahulu --</option>
+                        </select>
+                    </div>
                 </div>
 
                 <div class="checkout__totals-wrapper">
@@ -218,8 +249,12 @@
                                     </tr>
                                     @endif
                                     <tr>
+                                        <th>Ongkos Kirim</th>
+                                        <td class="text-right" id="shipping-cost">Rp. 0</td>
+                                    </tr>
+                                    <tr>
                                         <th>TOTAL</th>
-                                        <td class="text-right"><strong>Rp.
+                                        <td class="text-right"><strong id="total-price">Rp.
                                                 {{ number_format($total, 0, ',', '.') }}</strong></td>
                                     </tr>
                                 </tbody>
@@ -248,6 +283,7 @@
                             <div class="text-danger mt-1">{{ $message }}</div>
                             @enderror
                         </div>
+                        <input type="hidden" name="shipping_cost" id="shipping_cost_input" value="0">
                         <button type="submit" id="pay-button" class="btn btn-primary btn-checkout">BUAT
                             PESANAN</button>
                     </div>
@@ -263,8 +299,8 @@
     data-client-key="{{ config('midtrans.client_key') }}"></script>
 
 <script type="text/javascript">
+    // Script untuk pembayaran Midtrans & Pembatalan Order
     $(document).ready(function() {
-        // [BARU] Variabel global untuk menyimpan ID pesanan yang sedang diproses
         let pendingOrderId = null;
 
         $('#checkout-form').on('submit', function(event) {
@@ -272,7 +308,7 @@
             var selectedPaymentMethod = $('input[name="mode"]:checked').val();
 
             if (selectedPaymentMethod === 'transfer') {
-                event.preventDefault(); // Hentikan form submission untuk AJAX
+                event.preventDefault();
 
                 payButton.prop('disabled', true);
                 payButton.html('Memproses...');
@@ -283,7 +319,6 @@
                     data: $(this).serialize(),
                     cache: false,
                     success: function(data) {
-                        // Aktifkan kembali tombol jika ada error dari server
                         if (data.error || !data.snap_token) {
                             alert(data.error || 'Gagal mendapatkan token pembayaran.');
                             payButton.prop('disabled', false);
@@ -291,34 +326,26 @@
                             return;
                         }
 
-                        // [MODIFIKASI] Simpan Order ID yang diterima dari server
                         pendingOrderId = data.order_id;
 
                         snap.pay(data.snap_token, {
                             onSuccess: function(result) {
-                                pendingOrderId =
-                                    null; // Reset ID karena berhasil
+                                pendingOrderId = null;
                                 sendPaymentResult(result);
                             },
                             onPending: function(result) {
-                                pendingOrderId =
-                                    null; // Reset ID karena pending
+                                pendingOrderId = null;
                                 sendPaymentResult(result);
                             },
                             onError: function(result) {
                                 alert("Pembayaran Gagal!");
-                                // [MODIFIKASI] Panggil fungsi pembatalan
                                 cancelOrder(pendingOrderId);
                                 payButton.prop('disabled', false);
                                 payButton.html('BUAT PESANAN');
                             },
                             onClose: function() {
-                                // [MODIFIKASI] Panggil fungsi pembatalan jika popup ditutup
-                                // Hanya panggil jika pembayaran tidak sukses/pending
                                 if (pendingOrderId) {
-                                    console.log(
-                                        'Popup ditutup, membatalkan pesanan...'
-                                    );
+                                    console.log('Popup ditutup, membatalkan pesanan...');
                                     cancelOrder(pendingOrderId);
                                 }
                                 payButton.prop('disabled', false);
@@ -333,16 +360,14 @@
                         payButton.html('BUAT PESANAN');
                     }
                 });
-            } else { // Jika metode 'cod' atau lainnya
+            } else {
                 payButton.prop('disabled', true);
                 payButton.html('Memproses...');
-                // Form akan submit secara normal
             }
         });
 
         function sendPaymentResult(result) {
             $.ajax({
-                // Pastikan route ini benar, sesuaikan jika perlu
                 url: "{{ route('payment.success') }}",
                 method: 'POST',
                 data: {
@@ -359,16 +384,13 @@
             });
         }
 
-        // [BARU] Fungsi untuk mengirim request pembatalan order ke server
         function cancelOrder(orderId) {
             if (!orderId) {
-                return; // Jangan lakukan apa-apa jika tidak ada order ID
+                return;
             }
-
             console.log('Mencoba membatalkan pesanan ID: ' + orderId);
-
             $.ajax({
-                url: "{{ route('cart.order.cancel') }}", // Pastikan route ini ada di web.php
+                url: "{{ route('cart.order.cancel') }}",
                 method: 'POST',
                 data: {
                     _token: "{{ csrf_token() }}",
@@ -376,78 +398,87 @@
                 },
                 success: function(response) {
                     console.log('Respons pembatalan:', response.message);
-                    pendingOrderId = null; // Reset ID setelah diproses
+                    pendingOrderId = null;
                 },
                 error: function(xhr) {
                     console.error('Gagal mengirim permintaan pembatalan:', xhr.responseText);
-                    pendingOrderId = null; // Reset ID
+                    pendingOrderId = null;
                 }
             });
         }
     });
-</script>
-@section('scripts')
-<script>
-    document.addEventListener("DOMContentLoaded", function() {
-        let destination_area_id = "{{ $user->address->area_id ?? '' }}";
 
-        if (!destination_area_id) {
-            console.warn("Destination area_id belum ada");
-            return;
-        }
+    // Script untuk Ongkos Kirim Biteship
+    document.addEventListener('DOMContentLoaded', function() {
+        const checkoutForm = document.getElementById('checkout-form');
+        const courierSelect = document.getElementById('courier');
+        const serviceSelect = document.getElementById('service');
 
-        fetch(`/shipping/rates?destination=${destination_area_id}`)
-            .then(res => res.json())
-            .then(data => {
-                console.log("Rates dari server:", data); // cek di console browser
+        // Membaca data dari form yang sudah di-render oleh PHP
+        const totalWeight = parseInt(checkoutForm.dataset.totalWeight) || 0;
+        const subtotal = parseInt(checkoutForm.dataset.subtotal) || 0;
 
-                let select = document.getElementById("shipping_option");
-                select.innerHTML = ""; // reset isi
+        courierSelect.addEventListener('change', function() {
+            let courier = this.value;
+            let destination = "{{ optional(auth()->user()->address)->postal_code ?? '' }}";
 
-                if (data.pricing && data.pricing.length > 0) {
-                    data.pricing.forEach(rate => {
-                        let option = document.createElement("option");
-                        option.value = JSON.stringify({
-                            courier: rate.courier_name,
-                            service: rate.courier_service_name,
-                            cost: rate.price
+            serviceSelect.innerHTML = '<option value="">-- Memuat layanan... --</option>';
+            serviceSelect.disabled = true;
+            updateTotal(0);
+
+            if (!courier) {
+                serviceSelect.innerHTML = '<option value="">-- Pilih kurir terlebih dahulu --</option>';
+                return;
+            }
+
+            if (!destination) {
+                alert('Harap isi atau pilih alamat pengiriman dengan kode pos yang valid terlebih dahulu.');
+                serviceSelect.innerHTML = '<option value="">-- Alamat tidak valid --</option>';
+                courierSelect.value = '';
+                return;
+            }
+
+            fetch(`{{ route('checkout.services') }}?courier=${courier}&destination=${destination}&weight=${totalWeight}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Gagal mengambil data layanan. Kode Status: ' + response.status);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    serviceSelect.innerHTML = '<option value="">-- Pilih layanan --</option>';
+                    if (data.pricing && data.pricing.length > 0) {
+                        data.pricing.forEach(service => {
+                            let option = document.createElement('option');
+                            option.value = service.price;
+                            option.dataset.serviceName = service.courier_service_name;
+                            option.textContent = `${service.courier_service_name} - Rp ${service.price.toLocaleString()}`;
+                            serviceSelect.appendChild(option);
                         });
-                        option.textContent = `${rate.courier_name.toUpperCase()} - ${rate.courier_service_name} (Rp ${rate.price.toLocaleString()})`;
-                        select.appendChild(option);
-                    });
-                } else {
-                    let option = document.createElement("option");
-                    option.value = "";
-                    option.textContent = "Tidak ada layanan tersedia";
-                    select.appendChild(option);
-                }
-            })
-            .catch(err => console.error("Error ambil ongkir:", err));
+                    } else {
+                        serviceSelect.innerHTML = '<option value="">-- Tidak ada layanan tersedia --</option>';
+                    }
+                    serviceSelect.disabled = false;
+                })
+                .catch(error => {
+                    console.error('Error saat mengambil ongkos kirim:', error);
+                    serviceSelect.innerHTML = '<option value="">-- Gagal memuat layanan --</option>';
+                });
+        });
+
+        serviceSelect.addEventListener('change', function() {
+            let shippingCost = parseInt(this.value) || 0;
+            updateTotal(shippingCost);
+        });
+
+        function updateTotal(shippingCost) {
+            let total = subtotal + shippingCost;
+
+            document.getElementById('shipping-cost').innerText = `Rp. ${shippingCost.toLocaleString()}`;
+            document.getElementById('total-price').innerHTML = `<strong>Rp. ${total.toLocaleString()}</strong>`;
+            document.getElementById('shipping_cost_input').value = shippingCost;
+        }
     });
 </script>
-<script>
-document.getElementById('courier').addEventListener('change', function() {
-    let courier = this.value;
-    let destination = "{{ auth()->user()->address->zip ?? '40115' }}"; // contoh pakai kode pos user
-    let totalWeight = {{ $cartItems->sum(fn($i) => $i->product->weight * $i->quantity) }}; // pastikan ada field `weight`
-
-    if(courier) {
-        fetch("{{ route('checkout.services') }}?courier=" + courier + "&destination=" + destination + "&weight=" + totalWeight)
-            .then(res => res.json())
-            .then(data => {
-                let serviceSelect = document.getElementById('service');
-                serviceSelect.innerHTML = '<option value="">-- Pilih layanan --</option>';
-                data.pricing.forEach(service => {
-                    serviceSelect.innerHTML += `<option value="${service.courier_service_name}" data-price="${service.price}">
-                        ${service.courier_service_name} - Rp${service.price}
-                    </option>`;
-                });
-            });
-    }
-});
-</script>
-
-@endsection
-
 @endpush
 @endsection

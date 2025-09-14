@@ -15,7 +15,7 @@ class Address extends Model
         'state',
         'country',
         'landmark',
-        'zip',
+        'postal_code',
         'type',
         'isdefault'
     ];

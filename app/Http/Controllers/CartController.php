@@ -19,37 +19,76 @@ use Midtrans\Config as MidtransConfig;
 use Midtrans\Snap as MidtransSnap;
 use App\Services\BiteshipService;
 use Illuminate\Support\Facades\Http;
-
+use Illuminate\Support\Facades\Log; // <-- Pastikan baris ini ada
 
 class CartController extends Controller
 {
     // ... (Method lain yang tidak berubah seperti index, add_to_cart, dll tetap di sini)
+    public function getCouriersJson()
+{
+    $response = Http::withToken(config('services.biteship.api_key'))
+        ->get('https://api.biteship.com/v1/couriers');
+
+    if ($response->successful()) {
+        return response()->json($response->json());
+    }
+
+    Log::error('Biteship Get Couriers Gagal (JSON Route):', [
+        'status' => $response->status(),
+        'response' => $response->body()
+    ]);
+
+    return response()->json(['couriers' => []], 500);
+}
     public function getServices(Request $request)
     {
         $courier = $request->courier;
         $destination = $request->destination;
         $weight = $request->weight;
 
-        $response = Http::withToken(config('services.biteship.api_key'))
-            ->post('https://api.biteship.com/v1/rates/couriers', [
-                'origin_area_id' => config('services.biteship.origin'), // area_id toko kamu
-                'destination_postal_code' => $destination,
-                'courier_code' => $courier,
-                'items' => [
-                    [
-                        'name' => 'Produk Checkout',
-                        'weight' => $weight,
-                        'quantity' => 1
-                    ]
+        // Validasi input dasar
+        if (!$courier || !$destination || !$weight) {
+            return response()->json(['pricing' => [], 'error' => 'Parameter tidak lengkap.'], 400);
+        }
+
+        $payload = [
+            'origin_area_id' => config('services.biteship.origin'),
+            'destination_postal_code' => $destination,
+            'courier_code' => $courier,
+            'items' => [
+                [
+                    'name' => 'Produk Checkout',
+                    'description' => 'Item checkout',
+                    'value' => 1000, // Nilai barang (wajib diisi, bisa diisi nilai default)
+                    'weight' => (int)$weight,
+                    'quantity' => 1
                 ]
-            ]);
+            ]
+        ];
+
+        $response = Http::withToken(config('services.biteship.api_key'))
+            ->post('https://api.biteship.com/v1/rates/couriers', $payload);
 
         if ($response->failed()) {
+            // Catat error ke log
+            Log::error('Biteship Get Services Gagal:', [
+                'status' => $response->status(),
+                'response' => $response->body(),
+                'request_payload' => $payload
+            ]);
             return response()->json(['pricing' => []], 500);
         }
 
+        $responseData = $response->json();
+        
+        if (!isset($responseData['pricing'])) {
+             Log::warning('Biteship Get Services - Key "pricing" tidak ditemukan:', [
+                'response' => $responseData,
+             ]);
+        }
+
         return response()->json([
-            'pricing' => $response->json()['pricing'] ?? []
+            'pricing' => $responseData['pricing'] ?? []
         ]);
     }
 
@@ -234,111 +273,83 @@ class CartController extends Controller
     /**
      * [BARU] Menangani item yang dipilih dari keranjang untuk di-checkout.
      */
-    public function checkoutSelected(Request $request)
-    {
-        $selectedProductIds = $request->input('selected_products', []);
-
-        if (empty($selectedProductIds)) {
-            return redirect()->back()->with('error', 'Silakan pilih produk yang akan di-checkout.');
-        }
-
-        $userId = Auth::id();
-        $selectedItems = CartItem::where('user_id', $userId)
-            ->whereIn('id', $selectedProductIds)
-            ->get();
-
-        if ($selectedItems->isEmpty()) {
-            return redirect()->back()->with('error', 'Produk yang dipilih tidak valid.');
-        }
-
-        // Simpan item yang dipilih ke sesi untuk diproses di halaman checkout
-        session()->put('selected_checkout_items', $selectedItems);
-
-        // Pastikan session buyNow bersih
-        session()->forget('buy_now_item');
-
-        return redirect()->route('cart.checkout');
-    }
-
-    /**
-     * [MODIFIKASI] Menampilkan halaman checkout dengan 3 skenario berbeda.
-     */
     public function checkout(Request $request)
-    {
-        $user = Auth::user();
-        $address = Address::where('user_id', $user->id)->first();
+{
+    $user = Auth::user();
+    $address = Address::where('user_id', $user->id)->first();
 
-        // --- Ambil daftar kurir dari Biteship ---
-        $response = Http::withToken(config('services.biteship.api_key'))
-            ->get('https://api.biteship.com/v1/couriers');
+    $response = Http::withToken(config('services.biteship.api_key'))
+        ->get('https://api.biteship.com/v1/couriers');
 
-        $couriers = $response->successful() ? $response->json()['couriers'] : [];
-
-
-        // Skenario 1: Checkout dari "Beli Sekarang"
-        if (session()->has('buy_now_item')) {
-            $buyNowData = session('buy_now_item');
-            $product = Product::find($buyNowData['product_id']);
-            $quantity = $buyNowData['quantity'];
-
-            if (!$product) {
-                session()->forget('buy_now_item');
-                return redirect()->route('shop.index')->with('error', 'Produk tidak ditemukan.');
-            }
-
-            $price = $product->sale_price > 0 ? $product->sale_price : $product->regular_price;
-            $subtotal = $price * $quantity;
-            $total = $subtotal;
-
-            $item = new \stdClass();
-            $item->product = $product;
-            $item->quantity = $quantity;
-            $item->subtotal = $subtotal;
-            $items = collect([$item]);
-
-            $this->setAmountForCheckout(true);
-
-            return view('checkout', compact('address', 'items', 'subtotal', 'total'));
-        }
-        // Skenario 2: Checkout dari item yang dipilih di keranjang
-        elseif (session()->has('selected_checkout_items')) {
-            $items = session('selected_checkout_items');
-
-            if ($items->isEmpty()) {
-                return redirect()->route('cart.index')->with('info', 'Tidak ada item terpilih.');
-            }
-
-            $subtotal = $items->sum(fn($item) => $item->price * $item->quantity);
-            $total = $subtotal;
-
-            $this->setAmountForCheckout(false, $items); // Kirim item terpilih
-
-            return view('checkout', compact('address', 'items', 'subtotal', 'total'));
-        }
-        // Skenario 3: Checkout dari seluruh isi Keranjang Belanja
-        else {
-            $items = CartItem::where('user_id', $user->id)->get();
-            if ($items->isEmpty()) {
-                return redirect()->route('cart.index')->with('info', 'Keranjang Anda kosong.');
-            }
-
-            $subtotal = $items->sum(fn($item) => $item->price * $item->quantity);
-
-            $this->calculateDiscount();
-
-            if (Session::has('discounts')) {
-                $subtotal = Session::get('discounts')['subtotal'];
-                $total = Session::get('discounts')['total']; // Total sudah dihitung tanpa pajak
-            } else {
-                $total = $subtotal; // PAJAK DIHAPUS
-            }
-
-            $this->setAmountForCheckout(false);
-
-            return view('checkout', compact('address', 'items', 'subtotal', 'total'));
-        }
+    $shippingCouriers = [];
+    if ($response->successful()) {
+        $shippingCouriers = $response->json()['couriers'] ?? [];
+    } else {
+        Log::error('Biteship Get Couriers Gagal:', [
+            'status' => $response->status(),
+            'response' => $response->body()
+        ]);
     }
 
+    $items = collect();
+    $subtotal = 0;
+    $total = 0;
+    $totalWeight = 0; // <-- Inisialisasi total berat
+
+    // Skenario 1: Checkout dari "Beli Sekarang"
+    if (session()->has('buy_now_item')) {
+        $buyNowData = session('buy_now_item');
+        $product = Product::find($buyNowData['product_id']);
+        if (!$product) {
+            session()->forget('buy_now_item');
+            return redirect()->route('shop.index')->with('error', 'Produk tidak ditemukan.');
+        }
+        $quantity = $buyNowData['quantity'];
+        $price = $product->sale_price > 0 ? $product->sale_price : $product->regular_price;
+        $subtotal = $price * $quantity;
+        $total = $subtotal;
+        $totalWeight = ($product->weight ?? 100) * $quantity; // <-- Hitung berat
+
+        $item = new \stdClass();
+        $item->product = $product;
+        $item->quantity = $quantity;
+        $item->subtotal = $subtotal;
+        $items = collect([$item]);
+        $this->setAmountForCheckout(true);
+    }
+    // Skenario 2: Checkout dari item yang dipilih di keranjang
+    elseif (session()->has('selected_checkout_items')) {
+        $items = session('selected_checkout_items');
+        if ($items->isEmpty()) {
+            return redirect()->route('cart.index')->with('info', 'Tidak ada item terpilih.');
+        }
+        $subtotal = $items->sum(fn($item) => $item->price * $item->quantity);
+        $total = $subtotal;
+        $totalWeight = $items->sum(fn($item) => ($item->product->weight ?? 100) * $item->quantity); // <-- Hitung berat
+        $this->setAmountForCheckout(false, $items);
+    }
+    // Skenario 3: Checkout dari seluruh isi Keranjang Belanja
+    else {
+        $items = CartItem::where('user_id', $user->id)->with('product')->get();
+        if ($items->isEmpty()) {
+            return redirect()->route('cart.index')->with('info', 'Keranjang Anda kosong.');
+        }
+        $subtotal = $items->sum(fn($item) => $item->price * $item->quantity);
+        $totalWeight = $items->sum(fn($item) => ($item->product->weight ?? 100) * $item->quantity); // <-- Hitung berat
+        
+        $this->calculateDiscount();
+        if (Session::has('discounts')) {
+            $subtotal = Session::get('discounts')['subtotal'];
+            $total = Session::get('discounts')['total'];
+        } else {
+            $total = $subtotal;
+        }
+        $this->setAmountForCheckout(false);
+    }
+
+    // Perhatikan penambahan 'totalWeight' di sini
+    return view('checkout', compact('address', 'items', 'subtotal', 'total', 'shippingCouriers', 'totalWeight'));
+}
     /**
      * [MODIFIKASI] Menyimpan pesanan ke database.
      */
@@ -357,11 +368,11 @@ class CartController extends Controller
                 'name' => 'required|string|max:255',
                 'phone' => 'required|string|max:20',
                 'address' => 'required|string',
-                'landmark' => 'required|string',
+                'postal_code' => 'required|numeric|digits:5',
                 'locality' => 'required|string',
                 'city' => 'required|string',
                 'state' => 'required|string',
-                'zip' => 'required|string|max:10',
+                'postal_code' => 'required|numeric|digits:5',
                 'country' => 'required|string',
                 'type' => 'required|in:Rumah,Kantor,Lainnya',
             ]);
@@ -377,7 +388,7 @@ class CartController extends Controller
             $address->locality = $request->locality;
             $address->city = $request->city;
             $address->state = $request->state;
-            $address->zip = $request->zip;
+            $address->postal_code = $request->postal_code;
             $address->country = $request->country;
             $address->type = $request->type;
             $address->isdefault = 1;
@@ -389,6 +400,8 @@ class CartController extends Controller
             return redirect()->route('shop.index')->with('error', 'Sesi checkout berakhir, silakan coba lagi.');
         }
 
+        $shipping_cost = $request->input('shipping_cost', 0);
+
         DB::beginTransaction();
         try {
             $order = new Order();
@@ -396,7 +409,8 @@ class CartController extends Controller
             $order->subtotal = $checkout['subtotal'];
             $order->discount = $checkout['discount'];
             $order->tax = 0;
-            $order->total = $checkout['total'];
+            $order->shipping_cost = $shipping_cost; // Simpan ongkos kirim
+            $order->total = $checkout['total'] + $shipping_cost; // Tambahkan ongkos kirim ke total
             $order->name = $address->name;
             $order->phone = $address->phone;
             $order->address = $address->address;
@@ -404,7 +418,7 @@ class CartController extends Controller
             $order->locality = $address->locality;
             $order->city = $address->city;
             $order->state = $address->state;
-            $order->zip = $address->zip;
+            $order->postal_code = $address->postal_code;
             $order->country = $address->country;
             $order->status = 'ordered';
             $order->save();
@@ -449,6 +463,7 @@ class CartController extends Controller
             }
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('Gagal membuat pesanan: ' . $e->getMessage()); // Tambahkan log error
             return redirect()->route('cart.checkout')->with('error', 'Terjadi kesalahan saat memproses pesanan: ' . $e->getMessage());
         }
     }
@@ -480,6 +495,7 @@ class CartController extends Controller
             return redirect()->route('cart.order.confirmation');
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('Gagal proses COD: ' . $e->getMessage()); // Tambahkan log error
             return redirect()->route('cart.checkout')->with('error', 'Gagal memproses pesanan COD: ' . $e->getMessage());
         }
     }
@@ -528,6 +544,7 @@ class CartController extends Controller
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('Gagal proses Transfer: ' . $e->getMessage()); // Tambahkan log error
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }
@@ -571,6 +588,7 @@ class CartController extends Controller
                     return response()->json(['status' => 'success', 'message' => 'Pesanan berhasil dibatalkan.']);
                 } catch (\Exception $e) {
                     DB::rollBack();
+                    Log::error('Gagal membatalkan pesanan: ' . $e->getMessage()); // Tambahkan log error
                     return response()->json(['status' => 'error', 'message' => 'Gagal membatalkan pesanan: ' . $e->getMessage()], 500);
                 }
             }

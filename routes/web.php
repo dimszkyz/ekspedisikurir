@@ -21,6 +21,8 @@ Route::get('/', function () {
 
 Auth::routes();
 
+Route::get('/get-couriers', [App\Http\Controllers\CartController::class, 'getCouriersJson'])->name('checkout.get.couriers');
+
 Route::get('/checkout/services', [CartController::class, 'getServices'])->name('checkout.services');
 
 Route::middleware('auth')->group(function () {

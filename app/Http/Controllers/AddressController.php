@@ -41,8 +41,7 @@ class AddressController extends Controller
             'address'   => 'required|string',
             'city'      => 'required|string|max:100',
             'state'     => 'required|string|max:100',
-            'landmark'  => 'required|max:255', // WAJIB
-            'zip'       => 'required|numeric|digits:5',
+            'postal_code' => 'required|numeric|digits:5',
             'type'      => 'required|in:Rumah,Kantor,Lainnya', // WAJIB
             'isdefault' => 'nullable|boolean',
         ]);
@@ -83,12 +82,11 @@ class AddressController extends Controller
         $validated = $request->validate([
             'name'      => 'required|string|max:255',
             'phone'     => 'required|string|max:20',
-            'zip'       => 'required|string|max:10',
             'state'     => 'required|string|max:100',
             'city'      => 'required|string|max:100',
             'address'   => 'required|string|max:255',
             'locality'  => 'required|string|max:255',
-            'landmark'  => 'required|string|max:255', // WAJIB
+            'postal_code' => 'required|numeric|digits_between:5,6',
             'type'      => 'required|in:Rumah,Kantor,Lainnya', // WAJIB
             'isdefault' => 'nullable|boolean',
         ]);
@@ -115,10 +113,10 @@ class AddressController extends Controller
     {
         // Cari alamat milik user yang sedang login untuk keamanan
         $address = Address::where('id', $id)->where('user_id', Auth::id())->firstOrFail();
-        
+
         // Hapus object yang sudah ditemukan
-        $address->delete(); 
-        
+        $address->delete();
+
         return redirect()->route('user.address.index')->with('success', 'Alamat berhasil dihapus!');
     }
 }

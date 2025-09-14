@@ -17,11 +17,6 @@ return [
     'postmark' => [
         'token' => env('POSTMARK_TOKEN'),
     ],
-    'biteship' => [
-        'api_key' => env('BITESHIP_API_KEY'),
-        'base_url' => env('BITESHIP_BASE_URL', 'https://api.biteship.com/v1'),
-    ],
-
     'ses' => [
         'key' => env('AWS_ACCESS_KEY_ID'),
         'secret' => env('AWS_SECRET_ACCESS_KEY'),
@@ -39,6 +34,11 @@ return [
         'client_id' => env('GOOGLE_CLIENT_ID'),
         'client_secret' => env('GOOGLE_CLIENT_SECRET'),
         'redirect' => env('GOOGLE_REDIRECT_URI'),
+    ],
+    'biteship' => [
+        'api_key' => env('BITESHIP_API_KEY'),
+        'base_url' => env('BITESHIP_BASE_URL', 'https://api.biteship.com/v1'),
+        'origin' => env('BITESHIP_ORIGIN_AREA_ID'),
     ],
 
 ];

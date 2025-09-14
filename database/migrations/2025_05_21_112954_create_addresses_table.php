@@ -21,8 +21,8 @@ return new class extends Migration
             $table->string('city');
             $table->string('state');
             $table->string('country');
-            $table->string('landmark')->nullable();
-            $table->string('zip');
+            $table->string('postal_code', 10)->nullable();
+            $table->string('postal_code');
             $table->string('type')->default('Rumah');
             $table->boolean('isdefault')->default(false);
             $table->timestamps();
